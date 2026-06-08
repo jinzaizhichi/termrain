@@ -492,14 +492,16 @@ impl WeatherProvider for Jma {
     }
 
     async fn radar(&self, lat: f64, lon: f64, zoom: u8, time_offset: i32) -> Result<RadarGrid> {
-        // ナウキャストは PNG タイル。targetTimes_N1.json には複数時刻が並ぶ。
-        // 配列の先頭が最新（現在）、time_offset で前後にスクラブ。
-        #[derive(Deserialize)]
+        // ナウキャストのエンドポイント:
+        //   - targetTimes_N1.json : 過去・現在の実況 (basetime == validtime)
+        //   - targetTimes_N2.json : 未来予測 (basetime 共通、validtime が +5..+60 分)
+        // URL のパスは両方 "/none/" で OK。サーバが basetime/validtime の組合せから判別する。
+        #[derive(Deserialize, Clone)]
         struct TargetTime {
             basetime: String,
             validtime: String,
         }
-        let times: Vec<TargetTime> = self
+        let n1: Vec<TargetTime> = self
             .client
             .get("https://www.jma.go.jp/bosai/jmatile/data/nowc/targetTimes_N1.json")
             .send()
@@ -507,29 +509,40 @@ impl WeatherProvider for Jma {
             .error_for_status()?
             .json()
             .await?;
-        if times.is_empty() {
-            anyhow::bail!("ナウキャスト targetTimes が空");
+        if n1.is_empty() {
+            anyhow::bail!("ナウキャスト targetTimes_N1 が空");
         }
-        // targetTimes_N1.json は新しい順に並ぶ（[0] が最新）かつ実況 (basetime == validtime) のみ。
-        // - time_offset == 0  : 最新の実況
-        // - time_offset <  0  : 過去（配列の |offset| 番目を採用）
-        // - time_offset >  0  : 未来予測。最新 basetime + 5 分 × offset を validtime にして
-        //                       URL の elem 部分を "fcst" にする。
-        let latest = &times[0];
-        let len = times.len() as i32;
-        let (basetime, validtime, elem): (String, String, &'static str) = if time_offset <= 0 {
-            let past_idx = ((-time_offset).min(len - 1)) as usize;
-            let t = &times[past_idx];
-            (t.basetime.clone(), t.validtime.clone(), "none")
+        let n1_len = n1.len() as i32;
+
+        let (basetime, validtime): (String, String) = if time_offset <= 0 {
+            // 過去・現在: N1 配列を使う (新しい順、index 0 が最新)
+            let past_idx = ((-time_offset).min(n1_len - 1)) as usize;
+            let t = &n1[past_idx];
+            (t.basetime.clone(), t.validtime.clone())
         } else {
-            // 5 分刻みで未来へ。最大 12 ステップ (60 分先) まで意味がある。
-            let steps = time_offset.min(12);
-            let base_dt = parse_jma_compact(&latest.basetime)
-                .unwrap_or_else(|_| chrono::Local::now());
-            let future = base_dt + chrono::Duration::minutes((steps as i64) * 5);
-            let vt = future.with_timezone(&chrono::Utc).format("%Y%m%d%H%M%S").to_string();
-            (latest.basetime.clone(), vt, "fcst")
+            // 未来予測: N2 を取得して validtime で昇順ソート
+            let n2: Vec<TargetTime> = self
+                .client
+                .get("https://www.jma.go.jp/bosai/jmatile/data/nowc/targetTimes_N2.json")
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            if n2.is_empty() {
+                // 未来予測が無ければ最新実況にフォールバック
+                let t = &n1[0];
+                (t.basetime.clone(), t.validtime.clone())
+            } else {
+                let mut sorted = n2;
+                sorted.sort_by(|a, b| a.validtime.cmp(&b.validtime));
+                let idx = ((time_offset - 1) as usize).min(sorted.len() - 1);
+                let t = &sorted[idx];
+                (t.basetime.clone(), t.validtime.clone())
+            }
         };
+        // URL パスは常に "none"（実況も予測も同じパスで取れる）
+        let elem: &'static str = "none";
         tracing::info!(
             "radar request time_offset={} basetime={} validtime={} elem={}",
             time_offset, basetime, validtime, elem
