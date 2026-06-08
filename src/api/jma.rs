@@ -336,10 +336,9 @@ impl WeatherProvider for Jma {
     }
 
     async fn hourly(&self, lat: f64, lon: f64) -> Result<Vec<HourlyPoint>> {
-        // JMA の forecast.json は「6時間ごとの降水確率」「3時間ごとの天気」が主で、
-        // 1時間刻みの気温・降水量は提供されない。
-        // ここでは「3時間ごとの気温（あれば）」と「6時間刻みの降水確率」を時系列で並べる。
-        // 完全な1時間粒度が必要な場合は将来 Open-Meteo を併用する手もある。
+        // JMA forecast.json は 1時間粒度の降水量は配信していない。
+        // 代わりに「3時間刻みの降水確率 (pops)」と「3時間刻みの気温 (temps)」が取れる。
+        // 降水量バーは降水確率を代用する（UI 側で表示切替）。
         let area = Self::nearest_area(lat, lon);
         let url = format!(
             "https://www.jma.go.jp/bosai/forecast/data/forecast/{}.json",
@@ -354,27 +353,18 @@ impl WeatherProvider for Jma {
             .json()
             .await?;
 
-        // forecast[0] が短期、time_series が複数入っている
         let short = json.get(0).context("forecast[0] が無い")?;
         let series = short
             .get("timeSeries")
             .and_then(|v| v.as_array())
             .context("timeSeries が無い")?;
 
-        // 気温は最後の timeSeries に入っていることが多い（地点別に temps が並ぶ）
-        let mut hourly: Vec<HourlyPoint> = Vec::new();
         let area_name = area.name;
 
-        // 簡易: 各 timeSeries を走査し、temps を持つものを優先的に抽出
-        for ts in series {
-            let times = ts
-                .get("timeDefines")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let areas = ts.get("areas").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-            // 最寄り地点を含む area を選ぶ。無ければ先頭
-            let selected = areas
+        // 「最寄り地点を含む area。無ければ先頭」を選ぶヘルパ
+        let pick_area = |ts: &serde_json::Value| -> Option<serde_json::Value> {
+            let areas = ts.get("areas").and_then(|v| v.as_array())?;
+            areas
                 .iter()
                 .find(|a| {
                     a.get("area")
@@ -382,22 +372,82 @@ impl WeatherProvider for Jma {
                         .and_then(|x| x.as_str())
                         .is_some_and(|n| n.contains(area_name))
                 })
-                .or_else(|| areas.first());
-            let Some(a) = selected else { continue };
+                .or_else(|| areas.first())
+                .cloned()
+        };
 
-            if let Some(temps) = a.get("temps").and_then(|v| v.as_array()) {
-                for (i, t) in temps.iter().enumerate() {
-                    let Some(time_s) = times.get(i).and_then(|v| v.as_str()) else { continue };
-                    let Some(t_str) = t.as_str() else { continue };
-                    let Ok(temp_c) = t_str.parse::<f64>() else { continue };
-                    let Ok(dt) = DateTime::parse_from_rfc3339(time_s) else { continue };
-                    hourly.push(HourlyPoint {
-                        time: dt.with_timezone(&Local),
-                        temperature_c: temp_c,
-                        precipitation_mm: 0.0,
-                        precipitation_prob_pct: None,
-                    });
-                }
+        // ---- 1) pops を時刻ペアで集める ----
+        let mut pops_pairs: Vec<(DateTime<Local>, f64)> = Vec::new();
+        for ts in series {
+            let Some(a) = pick_area(ts) else { continue };
+            let Some(pops) = a.get("pops").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            let Some(times) = ts.get("timeDefines").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for (i, pv) in pops.iter().enumerate() {
+                let Some(time_s) = times.get(i).and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let Some(p_str) = pv.as_str() else { continue };
+                let Ok(p) = p_str.parse::<f64>() else { continue };
+                let Ok(dt) = DateTime::parse_from_rfc3339(time_s) else {
+                    continue;
+                };
+                pops_pairs.push((dt.with_timezone(&Local), p));
+            }
+        }
+
+        // 最寄りの pop を探すユーティリティ。
+        // pops は 3-6 時間粒度なので、時刻差が大きくても妥協的に最寄りを採用する。
+        let nearest_pop = |t: DateTime<Local>| -> Option<f64> {
+            pops_pairs
+                .iter()
+                .min_by_key(|(pt, _)| (*pt - t).num_minutes().abs())
+                .map(|(_, p)| *p)
+        };
+
+        // ---- 2) temps から HourlyPoint を作り、最寄り pop を付加 ----
+        let mut hourly: Vec<HourlyPoint> = Vec::new();
+        for ts in series {
+            let times = ts
+                .get("timeDefines")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let Some(a) = pick_area(ts) else { continue };
+            let Some(temps) = a.get("temps").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for (i, t) in temps.iter().enumerate() {
+                let Some(time_s) = times.get(i).and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let Some(t_str) = t.as_str() else { continue };
+                let Ok(temp_c) = t_str.parse::<f64>() else { continue };
+                let Ok(dt) = DateTime::parse_from_rfc3339(time_s) else {
+                    continue;
+                };
+                let time = dt.with_timezone(&Local);
+                hourly.push(HourlyPoint {
+                    time,
+                    temperature_c: temp_c,
+                    precipitation_mm: 0.0,
+                    precipitation_prob_pct: nearest_pop(time),
+                });
+            }
+        }
+
+        // temps が空 (週末等) なら pops 単体で系列を構築
+        if hourly.is_empty() {
+            for (time, pop) in pops_pairs {
+                hourly.push(HourlyPoint {
+                    time,
+                    temperature_c: f64::NAN,
+                    precipitation_mm: 0.0,
+                    precipitation_prob_pct: Some(pop),
+                });
             }
         }
 

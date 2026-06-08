@@ -74,26 +74,60 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
 
     f.render_widget(chart, split[0]);
 
-    // 降水量バー
+    // 降水バー
+    // - precipitation_mm が一つでも > 0 ならそちらを表示
+    // - 全部 0 でも precipitation_prob_pct が取れるなら降水確率(%)で代用 (JMA経路)
+    // - どちらも無ければ空白
     let bar_chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    let max_p = points.iter().map(|p| p.precipitation_mm).fold(0.0_f64, f64::max).max(1.0);
-    let bars: String = points
+    let has_mm = points.iter().any(|p| p.precipitation_mm > 0.0);
+    let has_pop = points
         .iter()
-        .map(|p| {
-            if p.precipitation_mm <= 0.0 {
-                ' '
-            } else {
-                let ratio = (p.precipitation_mm / max_p).clamp(0.0, 1.0);
-                let idx = ((ratio * (bar_chars.len() as f64 - 1.0)).round() as usize)
-                    .min(bar_chars.len() - 1);
-                bar_chars[idx]
-            }
-        })
-        .collect();
+        .any(|p| p.precipitation_prob_pct.is_some_and(|v| v > 0.0));
+
+    let (bars, label_text) = if has_mm {
+        let max_p = points
+            .iter()
+            .map(|p| p.precipitation_mm)
+            .fold(0.0_f64, f64::max)
+            .max(1.0);
+        let bars: String = points
+            .iter()
+            .map(|p| {
+                if p.precipitation_mm <= 0.0 {
+                    ' '
+                } else {
+                    let ratio = (p.precipitation_mm / max_p).clamp(0.0, 1.0);
+                    let idx = ((ratio * (bar_chars.len() as f64 - 1.0)).round() as usize)
+                        .min(bar_chars.len() - 1);
+                    bar_chars[idx]
+                }
+            })
+            .collect();
+        (bars, format!("降水量 (最大 {:.1}mm/h)", max_p))
+    } else if has_pop {
+        // 降水確率 (0-100%)
+        let bars: String = points
+            .iter()
+            .map(|p| {
+                let v = p.precipitation_prob_pct.unwrap_or(0.0);
+                if v <= 0.0 {
+                    ' '
+                } else {
+                    let ratio = (v / 100.0).clamp(0.0, 1.0);
+                    let idx = ((ratio * (bar_chars.len() as f64 - 1.0)).round() as usize)
+                        .min(bar_chars.len() - 1);
+                    bar_chars[idx]
+                }
+            })
+            .collect();
+        (bars, "降水確率 (%, JMAは降水量未配信のため確率を代用)".into())
+    } else {
+        (" ".repeat(points.len()), "降水データなし".into())
+    };
 
     let bar_line = Line::from(Span::styled(bars, Style::default().fg(Color::Blue)));
     let label = Line::from(Span::styled(
-        format!("降水 (最大 {:.1}mm/h)", max_p),
+        label_text,
         Style::default().fg(Color::DarkGray),
     ));
     let p = Paragraph::new(vec![bar_line, label]);

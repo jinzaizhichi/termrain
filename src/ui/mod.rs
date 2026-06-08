@@ -23,28 +23,24 @@ use crate::app::AppState;
 pub fn draw(f: &mut Frame, state: &mut AppState) {
     let size = f.area();
 
-    // 縦方向: ヘッダー、上段（レーダーがメイン）、中段、下段、フッター
-    //
-    // レーダーは地図表示なので縦幅を確保しないと意味がない。
-    // 端末高さに応じて Percentage で配分し、最低限の行数も保証する。
+    // 縦方向: ヘッダー、上段（左:現在天気 中:レーダー 右:週間予報サイド）、
+    //         時間別予報、フッター。下段の週間予報は廃止し、サイドに縦並びで配置することで
+    //         レーダー右の余白を埋め、全体のバランスを取る。
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),       // ヘッダー
-            Constraint::Min(16),         // 上段: 現在天気 + レーダー（大きく）
-            Constraint::Length(8),       // 時間別
-            Constraint::Length(6),       // 週間
-            Constraint::Length(1),       // フッター
+            Constraint::Length(1), // ヘッダー
+            Constraint::Min(18),   // 上段: 現在 + レーダー + 週間サイド
+            Constraint::Length(8), // 時間別予報
+            Constraint::Length(1), // フッター
         ])
         .split(size);
 
     draw_header(f, chunks[0], state);
 
-    // 上段を左右に分割。
-    // レーダーは正方形の画像（1024x1024）なので、パネルも見た目正方形にする。
-    // 端末 1 セルは縦長 (≒ 横10px : 縦20px = 1:2) なので、
-    // 見た目正方形にするには「幅セル数 = 高さセル数 × 2」が必要。
-    // 画像合成側のアスペクト比に合わせて、パネル幅をここで動的に決める。
+    // 上段の高さからレーダー画像のアスペクト比に応じた幅を計算する。
+    // フォント1セルは縦長（横:縦 ≒ 1:2）なので、画像が正方形(aspect=1)なら
+    // 見た目正方形にはセル幅 = 高さ × 2 が必要。
     let radar_aspect = if let Some(img) = state
         .radar
         .as_ref()
@@ -52,31 +48,36 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
     {
         img.width() as f32 / img.height() as f32
     } else {
-        1.0 // 画像が無い時のフォールバック
+        1.0
     };
-    // 「画像が正方形 (aspect=1)」の場合、見た目正方形にするためにセル幅 = 高さ × 2
-    // フォントセルは縦長なので「セル幅 = 高さ × 2 × aspect」
     let radar_h = chunks[1].height;
-    let radar_w_cells = ((radar_h as f32) * 2.0 * radar_aspect) as u16;
-    // 左ペインの 32 セルを引いた残り幅でクランプ
-    let max_radar_w = chunks[1].width.saturating_sub(32);
-    let radar_w_cells = radar_w_cells.min(max_radar_w).max(20);
+    let mut radar_w_cells = ((radar_h as f32) * 2.0 * radar_aspect) as u16;
+
+    // 左 (現在天気) と 右 (週間予報サイド) の最低幅を確保する。
+    // 週間サイドは「06/09(月)」が入る最小幅として 16 セル欲しい。
+    const LEFT_W: u16 = 28;
+    const SIDE_MIN_W: u16 = 18;
+    let total_w = chunks[1].width;
+    let reserved = LEFT_W + SIDE_MIN_W;
+    if radar_w_cells + reserved > total_w {
+        radar_w_cells = total_w.saturating_sub(reserved);
+    }
+    let side_w = total_w.saturating_sub(LEFT_W + radar_w_cells);
 
     let top = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(32),             // 現在の天気
-            Constraint::Length(radar_w_cells),  // レーダー (画像アスペクト比に合わせる)
-            Constraint::Min(0),                  // 余白
+            Constraint::Length(LEFT_W),         // 現在の天気
+            Constraint::Length(radar_w_cells),  // レーダー
+            Constraint::Length(side_w),         // 週間予報サイド
         ])
         .split(chunks[1]);
     current::draw(f, top[0], state);
     radar::draw(f, top[1], state);
+    weekly::draw(f, top[2], state);
 
     hourly::draw(f, chunks[2], state);
-    weekly::draw(f, chunks[3], state);
-
-    draw_footer(f, chunks[4], state);
+    draw_footer(f, chunks[3], state);
 }
 
 // 通常パネル用は &AppState で十分なのでラッパを介す
