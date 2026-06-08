@@ -216,7 +216,9 @@ impl Default for Jma {
 // 主要府県のコードと府県庁所在地の緯度経度
 pub struct AreaEntry {
     pub office: &'static str, // 例 "130000" (東京都)
-    pub class10: &'static str, // 例 "130010" (東京地方)
+    /// 例 "130010" (東京地方)。将来 forecast の細分地点を選ぶ際に使う。
+    #[allow(dead_code)]
+    pub class10: &'static str,
     pub name: &'static str,
     pub lat: f64,
     pub lon: f64,

@@ -22,6 +22,8 @@ pub struct CurrentWeather {
     pub temperature_c: f64,
     pub humidity_pct: Option<f64>,
     pub wind_speed_ms: Option<f64>,
+    /// 風向き（北=0°、東=90°）。将来 UI で矢印アイコン化するため保持。
+    #[allow(dead_code)]
     pub wind_direction_deg: Option<f64>,
 }
 
@@ -38,6 +40,8 @@ pub struct HourlyPoint {
 #[derive(Debug, Clone)]
 pub struct DailyPoint {
     pub date: chrono::NaiveDate,
+    /// 天気テキスト（"曇り一時雨" など）。将来 UI で詳細表示用に保持。
+    #[allow(dead_code)]
     pub condition: String,
     pub icon: WeatherIcon,
     pub temp_max_c: Option<f64>,

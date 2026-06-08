@@ -56,11 +56,28 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
     let temp_max = temp_data.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
     let pad = ((temp_max - temp_min) * 0.2).max(2.0);
 
+    // X 軸の時刻ラベルを 4 〜 6 個生成。先頭・末尾と等間隔の中間点を選ぶ。
+    // ratatui の Axis.labels は bounds 範囲を等間隔に区切って配置するので、
+    // points から対応 index の時刻を抽出するだけで OK。
+    let n = points.len();
+    let label_count = ((inner.width as usize) / 12).clamp(3, 6);
+    let mut x_labels: Vec<Span> = Vec::with_capacity(label_count);
+    for k in 0..label_count {
+        let idx = if label_count == 1 {
+            0
+        } else {
+            (k * (n - 1)) / (label_count - 1)
+        };
+        let text = points[idx].time.format("%H時").to_string();
+        x_labels.push(Span::styled(text, Style::default().fg(Color::Gray)));
+    }
+
     let chart = Chart::new(datasets)
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::DarkGray))
-                .bounds([0.0, temp_data.len() as f64 - 1.0]),
+                .bounds([0.0, temp_data.len() as f64 - 1.0])
+                .labels(x_labels),
         )
         .y_axis(
             Axis::default()
