@@ -1,0 +1,101 @@
+// 時間別予報グラフ。
+// ratatui の Chart は数値配列をいい感じに折れ線グラフにしてくれる。
+
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::symbols;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
+
+use crate::app::AppState;
+use super::titled_block;
+
+pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
+    let block = titled_block("時間別予報（気温:赤線 / 降水:青棒）");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if state.hourly.is_empty() {
+        let p = Paragraph::new(Line::from(Span::styled(
+            "読み込み中…",
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(p, inner);
+        return;
+    }
+
+    // 表示数は端末幅から逆算（最大 48 時間）
+    let take = (inner.width as usize).saturating_sub(4).min(48).max(8);
+    let points: Vec<&crate::api::HourlyPoint> = state.hourly.iter().take(take).collect();
+
+    // 気温折れ線データ
+    let temp_data: Vec<(f64, f64)> = points
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (i as f64, p.temperature_c))
+        .collect();
+
+    // 降水棒（縦線 0→値）— Bars 用のスタイルが Chart に無いので、ratatui の Sparkline で別レイヤに描く
+    // ここでは「上半分: Chart で気温」「下半分: テキストで降水量バー」に分割
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(2)])
+        .split(inner);
+
+    let datasets = vec![
+        Dataset::default()
+            .name("気温℃")
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Red))
+            .data(&temp_data),
+    ];
+
+    let temp_min = temp_data.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let temp_max = temp_data.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+    let pad = ((temp_max - temp_min) * 0.2).max(2.0);
+
+    let chart = Chart::new(datasets)
+        .x_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::DarkGray))
+                .bounds([0.0, temp_data.len() as f64 - 1.0]),
+        )
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::DarkGray))
+                .bounds([temp_min - pad, temp_max + pad])
+                .labels(vec![
+                    Span::raw(format!("{:.0}", temp_min - pad)),
+                    Span::raw(format!("{:.0}", temp_max + pad)),
+                ]),
+        );
+
+    f.render_widget(chart, split[0]);
+
+    // 降水量バー
+    let bar_chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max_p = points.iter().map(|p| p.precipitation_mm).fold(0.0_f64, f64::max).max(1.0);
+    let bars: String = points
+        .iter()
+        .map(|p| {
+            if p.precipitation_mm <= 0.0 {
+                ' '
+            } else {
+                let ratio = (p.precipitation_mm / max_p).clamp(0.0, 1.0);
+                let idx = ((ratio * (bar_chars.len() as f64 - 1.0)).round() as usize)
+                    .min(bar_chars.len() - 1);
+                bar_chars[idx]
+            }
+        })
+        .collect();
+
+    let bar_line = Line::from(Span::styled(bars, Style::default().fg(Color::Blue)));
+    let label = Line::from(Span::styled(
+        format!("降水 (最大 {:.1}mm/h)", max_p),
+        Style::default().fg(Color::DarkGray),
+    ));
+    let p = Paragraph::new(vec![bar_line, label]);
+    f.render_widget(p, split[1]);
+}

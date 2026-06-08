@@ -1,0 +1,420 @@
+// アプリ本体: 状態管理 + 入力イベント + 描画ループ
+//
+// 構造:
+//   AppState  ... 描画に必要な「現在の表示状態」
+//   run()     ... 端末を raw mode に切り替え、イベントループを回す
+//
+// 通信(reqwest)は I/O 待ちが長いので tokio::spawn でバックグラウンドへ。
+// 結果はチャンネル (mpsc) 経由でメインスレッドに戻す。
+
+use anyhow::{Context, Result};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use futures::StreamExt;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use std::io::{Stdout, stdout};
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio::time::{Duration, sleep};
+
+use crate::api::{
+    CurrentWeather, DailyPoint, HourlyPoint, RadarGrid, WeatherProvider, select_provider,
+};
+use crate::cli::Args;
+use crate::config::Config;
+use crate::map::MapData;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
+
+pub struct AppState {
+    pub config: Config,
+    pub provider_name: String,
+    pub current: Option<CurrentWeather>,
+    pub hourly: Vec<HourlyPoint>,
+    pub daily: Vec<DailyPoint>,
+    pub radar: Option<RadarGrid>,
+    pub map: Arc<MapData>,
+    /// Kitty/Sixel graphics 用の画像レンダラー。
+    /// 端末がサポートしていない場合は halfblocks 等にフォールバック。
+    pub image_picker: Option<Picker>,
+    /// 直近の合成済みレーダー画像（StatefulProtocol 化済み）。
+    pub radar_protocol: Option<StatefulProtocol>,
+    /// 時系列スクラブ位置。0=最新、+1で5分後、-1で5分前。
+    pub radar_time_offset: i32,
+    /// アニメーション再生中かどうか。p キーで toggle。
+    pub radar_playing: bool,
+    pub last_error: Option<String>,
+    pub quit: bool,
+}
+
+// 取得結果をメインに伝えるためのメッセージ
+enum Msg {
+    Current(CurrentWeather),
+    Hourly(Vec<HourlyPoint>),
+    Daily(Vec<DailyPoint>),
+    Radar(RadarGrid),
+    Map(Arc<MapData>),
+    Error(String),
+}
+
+pub async fn run(args: Args) -> Result<()> {
+    // 1) 設定読込（無ければデフォルト）
+    let mut config = Config::load_or_default()?;
+
+    // 2) CLI 引数で上書き
+    if let Some(city) = &args.city {
+        let client = reqwest::Client::builder()
+            .user_agent("termrain/0.1")
+            .build()?;
+        match crate::api::geocoding::search(&client, city).await {
+            Ok(hit) => {
+                config.location.name = hit.name;
+                config.location.latitude = hit.latitude;
+                config.location.longitude = hit.longitude;
+                config.location.country = hit.country;
+            }
+            Err(e) => {
+                eprintln!("地点検索に失敗: {e:#}");
+            }
+        }
+    }
+    if let (Some(lat), Some(lon)) = (args.lat, args.lon) {
+        config.location.latitude = lat;
+        config.location.longitude = lon;
+        // 都市名が未指定なら緯度経度ベースの判定で国も切り替え。
+        // 名前は「Custom」程度にしておき、座標はヘッダー側で別途表示する。
+        if args.city.is_none() {
+            config.location.name = "Custom".into();
+            if lat > 24.0 && lat < 46.0 && lon > 122.0 && lon < 146.0 {
+                config.location.country = "JP".into();
+            } else {
+                config.location.country = "".into();
+            }
+        }
+    }
+
+    // 3) プロバイダー選択
+    let provider: Arc<dyn WeatherProvider> =
+        Arc::from(select_provider(&config.location.country, args.force_jma));
+    let provider_name = provider.name().to_string();
+    // 設定で指定された地図スタイルをプロバイダーに反映
+    provider.set_map_style(config.radar.map_style);
+
+    // --dump モード: TUI を立ち上げず標準出力に出して終了
+    if args.dump {
+        let lat = config.location.latitude;
+        let lon = config.location.longitude;
+        let cur = provider.current(lat, lon).await?;
+        println!("{:#?}", cur);
+        let h = provider.hourly(lat, lon).await?;
+        println!("hourly: {} points", h.len());
+        let d = provider.daily(lat, lon).await?;
+        println!("daily: {} days", d.len());
+        return Ok(());
+    }
+
+    // 4) Picker 初期化（raw mode より前、stdio クエリのため）
+    // 失敗してもアプリは続行可（その場合は画像表示なし、Brailleフォールバック描画）
+    let image_picker = match Picker::from_query_stdio() {
+        Ok(p) => {
+            tracing::info!("画像レンダラー検出: {:?}", p.protocol_type());
+            Some(p)
+        }
+        Err(e) => {
+            tracing::warn!("Picker 初期化失敗（画像表示は無効）: {e:#}");
+            None
+        }
+    };
+
+    // 5) AppState を作って TUI を起動
+    let mut state = AppState {
+        config,
+        provider_name,
+        current: None,
+        hourly: Vec::new(),
+        daily: Vec::new(),
+        radar: None,
+        map: Arc::new(MapData::default()),
+        image_picker,
+        radar_protocol: None,
+        radar_time_offset: 0,
+        radar_playing: false,
+        last_error: None,
+        quit: false,
+    };
+
+    let mut terminal = setup_terminal().context("ターミナル初期化失敗")?;
+
+    // メッセージチャンネル
+    let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
+
+    // 初回フェッチを spawn（天気 + 地図データ）
+    spawn_fetch(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+    spawn_map_load(tx.clone());
+
+    let mut events = EventStream::new();
+    let mut auto_refresh = if state.config.ui.refresh_interval > 0 {
+        Some(tokio::time::interval(Duration::from_secs(
+            state.config.ui.refresh_interval,
+        )))
+    } else {
+        None
+    };
+
+    // 雨雲アニメーション再生用の tick (700ms 間隔)。
+    // 一度作っておき、playing=true のときだけ進行を反映する。
+    let mut anim_tick = tokio::time::interval(Duration::from_millis(700));
+    anim_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    // 描画
+    terminal.draw(|f| crate::ui::draw(f, &mut state))?;
+
+    loop {
+        tokio::select! {
+            // メッセージ受信
+            Some(msg) = rx.recv() => {
+                apply_msg(&mut state, msg);
+                terminal.draw(|f| crate::ui::draw(f, &mut state))?;
+            }
+            // 端末イベント
+            Some(Ok(ev)) = events.next() => {
+                if handle_event(&mut state, ev, &provider, &tx) {
+                    terminal.draw(|f| crate::ui::draw(f, &mut state))?;
+                }
+                if state.quit {
+                    break;
+                }
+            }
+            // 自動更新
+            _ = async {
+                if let Some(t) = auto_refresh.as_mut() {
+                    t.tick().await;
+                } else {
+                    // 自動更新が無効なら永遠に待つ
+                    sleep(Duration::from_secs(60 * 60 * 24)).await;
+                }
+            } => {
+                spawn_fetch(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+            }
+            // 雨雲アニメーション (playing 中のみ反映)
+            _ = anim_tick.tick() => {
+                if state.radar_playing {
+                    // -6 (30分前) から +12 (60分後) までループ
+                    state.radar_time_offset += 1;
+                    if state.radar_time_offset > 12 {
+                        state.radar_time_offset = -6;
+                    }
+                    spawn_radar(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+                }
+            }
+        }
+    }
+
+    restore_terminal(&mut terminal)?;
+    Ok(())
+}
+
+fn apply_msg(state: &mut AppState, msg: Msg) {
+    match msg {
+        Msg::Current(c) => state.current = Some(c),
+        Msg::Hourly(h) => state.hourly = h,
+        Msg::Daily(d) => state.daily = d,
+        Msg::Radar(r) => {
+            // 合成画像があれば StatefulProtocol 化（描画時にパネル領域に動的フィット）
+            if let (Some(picker), Some(img)) =
+                (state.image_picker.as_mut(), r.composite_image.as_ref())
+            {
+                let p = picker.new_resize_protocol(img.clone());
+                state.radar_protocol = Some(p);
+            }
+            state.radar = Some(r);
+        }
+        Msg::Map(m) => state.map = m,
+        Msg::Error(e) => state.last_error = Some(e),
+    }
+}
+
+/// 地図データ（海岸線）を非同期にロードする。
+/// 失敗してもアプリは続行できる（地図なしでレーダーは描ける）。
+fn spawn_map_load(tx: mpsc::UnboundedSender<Msg>) {
+    tokio::spawn(async move {
+        let client = match reqwest::Client::builder()
+            .user_agent("termrain/0.1")
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(Msg::Error(format!("map client: {e:#}")));
+                return;
+            }
+        };
+        match MapData::load(&client).await {
+            Ok(m) => { let _ = tx.send(Msg::Map(Arc::new(m))); }
+            Err(e) => { let _ = tx.send(Msg::Error(format!("map: {e:#}"))); }
+        }
+    });
+}
+
+fn handle_event(
+    state: &mut AppState,
+    ev: Event,
+    provider: &Arc<dyn WeatherProvider>,
+    tx: &mpsc::UnboundedSender<Msg>,
+) -> bool {
+    let Event::Key(k) = ev else { return false };
+    if k.kind != KeyEventKind::Press {
+        return false;
+    }
+    match k.code {
+        KeyCode::Char('q') | KeyCode::Esc => {
+            state.quit = true;
+        }
+        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.quit = true;
+        }
+        KeyCode::Char('r') => {
+            state.last_error = None;
+            spawn_fetch(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+        }
+        KeyCode::Char('+') | KeyCode::Char('=') => {
+            // 13 まで上げる。z=11-13 は JMA タイル z=10 を内部でクロップして拡大表示。
+            state.config.radar.zoom = (state.config.radar.zoom + 1).min(13);
+            spawn_radar(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+        }
+        KeyCode::Char('-') | KeyCode::Char('_') => {
+            state.config.radar.zoom = state.config.radar.zoom.saturating_sub(1).max(6);
+            spawn_radar(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+        }
+        // 移動量は 0.02 度（約 2km）。タイルキャッシュが効くので連打しても軽い。
+        KeyCode::Char('h') => shift_location(state, -0.02, 0.0, provider.clone(), tx.clone()),
+        KeyCode::Char('l') => shift_location(state, 0.02, 0.0, provider.clone(), tx.clone()),
+        KeyCode::Char('j') => shift_location(state, 0.0, -0.02, provider.clone(), tx.clone()),
+        KeyCode::Char('k') => shift_location(state, 0.0, 0.02, provider.clone(), tx.clone()),
+        // 時系列スクラブ: , (<) 過去、. (>) 未来。clamp は API 側でやる。
+        KeyCode::Char(',') | KeyCode::Char('<') => {
+            state.radar_time_offset = (state.radar_time_offset - 1).max(-20);
+            spawn_radar(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+        }
+        KeyCode::Char('.') | KeyCode::Char('>') => {
+            state.radar_time_offset = (state.radar_time_offset + 1).min(20);
+            spawn_radar(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+        }
+        // アニメーション再生 toggle。tokio interval で進行は外側で。
+        KeyCode::Char('p') => {
+            state.radar_playing = !state.radar_playing;
+        }
+        // 地図スタイル切替 (GSI → CARTO → 衛星写真 → GSI ...)
+        KeyCode::Char('m') | KeyCode::Char('M') => {
+            state.config.radar.map_style = state.config.radar.map_style.next();
+            provider.set_map_style(state.config.radar.map_style);
+            spawn_radar(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+        }
+        _ => return false,
+    }
+    true
+}
+
+fn shift_location(
+    state: &mut AppState,
+    dlon: f64,
+    dlat: f64,
+    provider: Arc<dyn WeatherProvider>,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    state.config.location.longitude += dlon;
+    state.config.location.latitude += dlat;
+    spawn_radar(provider, state.config.clone(), state.radar_time_offset, tx);
+}
+
+fn spawn_fetch(
+    provider: Arc<dyn WeatherProvider>,
+    cfg: Config,
+    time_offset: i32,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let lat = cfg.location.latitude;
+    let lon = cfg.location.longitude;
+    let zoom = cfg.radar.zoom;
+
+    // 4 種類のフェッチを並列に投げる
+    {
+        let p = provider.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            match p.current(lat, lon).await {
+                Ok(c) => { let _ = tx.send(Msg::Current(c)); }
+                Err(e) => { let _ = tx.send(Msg::Error(format!("current: {e:#}"))); }
+            }
+        });
+    }
+    {
+        let p = provider.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            match p.hourly(lat, lon).await {
+                Ok(v) => { let _ = tx.send(Msg::Hourly(v)); }
+                Err(e) => { let _ = tx.send(Msg::Error(format!("hourly: {e:#}"))); }
+            }
+        });
+    }
+    {
+        let p = provider.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            match p.daily(lat, lon).await {
+                Ok(v) => { let _ = tx.send(Msg::Daily(v)); }
+                Err(e) => { let _ = tx.send(Msg::Error(format!("daily: {e:#}"))); }
+            }
+        });
+    }
+    {
+        let p = provider;
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            match p.radar(lat, lon, zoom, time_offset).await {
+                Ok(r) => { let _ = tx.send(Msg::Radar(r)); }
+                Err(e) => { let _ = tx.send(Msg::Error(format!("radar: {e:#}"))); }
+            }
+        });
+    }
+}
+
+fn spawn_radar(
+    provider: Arc<dyn WeatherProvider>,
+    cfg: Config,
+    time_offset: i32,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let lat = cfg.location.latitude;
+    let lon = cfg.location.longitude;
+    let zoom = cfg.radar.zoom;
+    tokio::spawn(async move {
+        match provider.radar(lat, lon, zoom, time_offset).await {
+            Ok(r) => { let _ = tx.send(Msg::Radar(r)); }
+            Err(e) => { let _ = tx.send(Msg::Error(format!("radar: {e:#}"))); }
+        }
+    });
+}
+
+// === ターミナル制御 ===
+
+fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
+    enable_raw_mode()?;
+    let mut out = stdout();
+    execute!(out, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(out);
+    let terminal = Terminal::new(backend)?;
+    Ok(terminal)
+}
+
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
