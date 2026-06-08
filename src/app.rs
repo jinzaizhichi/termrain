@@ -47,8 +47,32 @@ pub struct AppState {
     pub radar_time_offset: i32,
     /// アニメーション再生中かどうか。p キーで toggle。
     pub radar_playing: bool,
+    /// 起動時の Splash 画面表示中か。データ取得 or 2秒経過で false に。
+    pub splash_active: bool,
+    /// `?` キーでヘルプモーダルを開いている状態
+    pub show_help: bool,
+    /// スピナーのフレーム番号。tick で +1 され、読み込み中表示に使う。
+    pub spinner_frame: usize,
     pub last_error: Option<String>,
     pub quit: bool,
+}
+
+/// Braille スピナー文字。120ms ごとに次へ進める。
+pub const SPINNER_FRAMES: &[&str] = &[
+    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+];
+
+impl AppState {
+    pub fn spinner(&self) -> &'static str {
+        SPINNER_FRAMES[self.spinner_frame % SPINNER_FRAMES.len()]
+    }
+    /// 何かしらまだ読み込み中（spinner を回す対象がある）か
+    pub fn is_loading(&self) -> bool {
+        self.current.is_none()
+            || self.radar.is_none()
+            || self.hourly.is_empty()
+            || self.daily.is_empty()
+    }
 }
 
 // 取得結果をメインに伝えるためのメッセージ
@@ -59,6 +83,8 @@ enum Msg {
     Radar(RadarGrid),
     Map(Arc<MapData>),
     Error(String),
+    /// Splash 演出を解除する（タイマー or 主要データ取得完了で送られる）
+    DismissSplash,
 }
 
 pub async fn run(args: Args) -> Result<()> {
@@ -143,6 +169,9 @@ pub async fn run(args: Args) -> Result<()> {
         radar_protocol: None,
         radar_time_offset: 0,
         radar_playing: false,
+        splash_active: true,
+        show_help: false,
+        spinner_frame: 0,
         last_error: None,
         quit: false,
     };
@@ -156,6 +185,15 @@ pub async fn run(args: Args) -> Result<()> {
     spawn_fetch(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
     spawn_map_load(tx.clone());
 
+    // Splash を 2 秒で自動解除
+    {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(1800)).await;
+            let _ = tx.send(Msg::DismissSplash);
+        });
+    }
+
     let mut events = EventStream::new();
     let mut auto_refresh = if state.config.ui.refresh_interval > 0 {
         Some(tokio::time::interval(Duration::from_secs(
@@ -166,9 +204,11 @@ pub async fn run(args: Args) -> Result<()> {
     };
 
     // 雨雲アニメーション再生用の tick (700ms 間隔)。
-    // 一度作っておき、playing=true のときだけ進行を反映する。
     let mut anim_tick = tokio::time::interval(Duration::from_millis(700));
     anim_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // スピナー進行用の tick (120ms)
+    let mut spinner_tick = tokio::time::interval(Duration::from_millis(120));
+    spinner_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     // 描画
     terminal.draw(|f| crate::ui::draw(f, &mut state))?;
@@ -203,12 +243,18 @@ pub async fn run(args: Args) -> Result<()> {
             // 雨雲アニメーション (playing 中のみ反映)
             _ = anim_tick.tick() => {
                 if state.radar_playing {
-                    // -6 (30分前) から +12 (60分後) までループ
                     state.radar_time_offset += 1;
                     if state.radar_time_offset > 12 {
                         state.radar_time_offset = -6;
                     }
                     spawn_radar(provider.clone(), state.config.clone(), state.radar_time_offset, tx.clone());
+                }
+            }
+            // スピナー進行: 何かしらロード中 or splash 中なら再描画
+            _ = spinner_tick.tick() => {
+                state.spinner_frame = state.spinner_frame.wrapping_add(1);
+                if state.splash_active || state.is_loading() {
+                    terminal.draw(|f| crate::ui::draw(f, &mut state))?;
                 }
             }
         }
@@ -235,6 +281,7 @@ fn apply_msg(state: &mut AppState, msg: Msg) {
         }
         Msg::Map(m) => state.map = m,
         Msg::Error(e) => state.last_error = Some(e),
+        Msg::DismissSplash => state.splash_active = false,
     }
 }
 
@@ -270,9 +317,21 @@ fn handle_event(
     if k.kind != KeyEventKind::Press {
         return false;
     }
+    // ヘルプ中はほぼ全部のキーでヘルプを閉じる（q/Esc は終了優先）
+    if state.show_help {
+        if matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
+            state.quit = true;
+            return true;
+        }
+        state.show_help = false;
+        return true;
+    }
     match k.code {
         KeyCode::Char('q') | KeyCode::Esc => {
             state.quit = true;
+        }
+        KeyCode::Char('?') => {
+            state.show_help = true;
         }
         KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
             state.quit = true;

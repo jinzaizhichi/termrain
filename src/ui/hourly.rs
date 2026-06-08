@@ -3,7 +3,8 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
+use super::theme;
 use ratatui::symbols;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
@@ -19,7 +20,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
     if state.hourly.is_empty() {
         let p = Paragraph::new(Line::from(Span::styled(
             "読み込み中…",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::SUBTLE),
         )));
         f.render_widget(p, inner);
         return;
@@ -48,7 +49,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
             .name("気温℃")
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::Red))
+            .style(Style::default().fg(theme::TEMP))
             .data(&temp_data),
     ];
 
@@ -69,19 +70,19 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
             (k * (n - 1)) / (label_count - 1)
         };
         let text = points[idx].time.format("%H時").to_string();
-        x_labels.push(Span::styled(text, Style::default().fg(Color::Gray)));
+        x_labels.push(Span::styled(text, Style::default().fg(theme::SUBTLE)));
     }
 
     let chart = Chart::new(datasets)
         .x_axis(
             Axis::default()
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(theme::SUBTLE))
                 .bounds([0.0, temp_data.len() as f64 - 1.0])
                 .labels(x_labels),
         )
         .y_axis(
             Axis::default()
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(theme::SUBTLE))
                 .bounds([temp_min - pad, temp_max + pad])
                 .labels(vec![
                     Span::raw(format!("{:.0}", temp_min - pad)),
@@ -142,10 +143,10 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
         (" ".repeat(points.len()), "降水データなし".into())
     };
 
-    let bar_line = Line::from(Span::styled(bars, Style::default().fg(Color::Blue)));
+    let bar_line = Line::from(Span::styled(bars, Style::default().fg(theme::RAIN)));
     let label = Line::from(Span::styled(
         label_text,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::SUBTLE),
     ));
     let p = Paragraph::new(vec![bar_line, label]);
     f.render_widget(p, split[1]);

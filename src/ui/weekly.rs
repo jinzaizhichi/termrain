@@ -6,10 +6,11 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use super::theme;
 use super::titled_block;
 use crate::app::AppState;
 
@@ -20,9 +21,10 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
 
     let mut lines: Vec<Line> = Vec::new();
     if state.daily.is_empty() {
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "読み込み中…",
-            Style::default().fg(Color::Gray),
+            format!("  {} 取得中…", state.spinner()),
+            Style::default().fg(theme::SUBTLE),
         )));
         f.render_widget(Paragraph::new(lines), inner);
         return;
@@ -39,10 +41,15 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
         let date_label = d.date.format("%m/%d (%a)").to_string();
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{} ", d.icon.symbol()),
+                format!(" {} ", d.icon.symbol()),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::styled(date_label, Style::default().fg(Color::Cyan)),
+            Span::styled(
+                date_label,
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]));
 
         // 気温と降水確率
@@ -60,13 +67,13 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
             .unwrap_or_else(|| "  - ".into());
 
         lines.push(Line::from(vec![
-            Span::raw("  "),
+            Span::raw("    "),
             Span::styled(
                 format!("{}/{}", hi, lo),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme::TEMP),
             ),
             Span::raw("  "),
-            Span::styled(pop, Style::default().fg(Color::Blue)),
+            Span::styled(pop, Style::default().fg(theme::RAIN)),
         ]));
 
         // 日と日の間に小さな区切り

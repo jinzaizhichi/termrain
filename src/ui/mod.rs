@@ -1,46 +1,51 @@
-// UI レイアウト: 4 ペイン構成
-//   ┌──────────┬─────────────────┐
-//   │ 現在天気 │ 雨雲レーダー    │
-//   ├──────────┴─────────────────┤
-//   │ 時間別予報グラフ           │
-//   ├────────────────────────────┤
-//   │ 週間予報                   │
-//   └────────────────────────────┘
+// UI レイアウト
+//
+// 構成:
+//   ヘッダー (1)
+//   上段 (Min 18): 現在天気 / レーダー / 週間予報
+//   時間別予報 (8)
+//   フッター (1)
+//
+// テーマは ui::theme に統一。パネル枠は角丸 (BorderType::Rounded)。
 
 mod current;
+mod help;
 mod hourly;
 mod radar;
+mod splash;
+pub mod theme;
 mod weekly;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 use crate::app::AppState;
 
 pub fn draw(f: &mut Frame, state: &mut AppState) {
     let size = f.area();
 
-    // 縦方向: ヘッダー、上段（左:現在天気 中:レーダー 右:週間予報サイド）、
-    //         時間別予報、フッター。下段の週間予報は廃止し、サイドに縦並びで配置することで
-    //         レーダー右の余白を埋め、全体のバランスを取る。
+    // Splash 起動演出（最優先）
+    if state.splash_active {
+        splash::draw(f, size, state);
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // ヘッダー
-            Constraint::Min(18),   // 上段: 現在 + レーダー + 週間サイド
-            Constraint::Length(8), // 時間別予報
-            Constraint::Length(1), // フッター
+            Constraint::Length(1),
+            Constraint::Min(18),
+            Constraint::Length(8),
+            Constraint::Length(1),
         ])
         .split(size);
 
     draw_header(f, chunks[0], state);
 
-    // 上段の高さからレーダー画像のアスペクト比に応じた幅を計算する。
-    // フォント1セルは縦長（横:縦 ≒ 1:2）なので、画像が正方形(aspect=1)なら
-    // 見た目正方形にはセル幅 = 高さ × 2 が必要。
+    // レーダー幅は画像アスペクト比に合わせる
     let radar_aspect = if let Some(img) = state
         .radar
         .as_ref()
@@ -52,9 +57,6 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
     };
     let radar_h = chunks[1].height;
     let mut radar_w_cells = ((radar_h as f32) * 2.0 * radar_aspect) as u16;
-
-    // 左 (現在天気) と 右 (週間予報サイド) の最低幅を確保する。
-    // 週間サイドは「06/09(月)」が入る最小幅として 16 セル欲しい。
     const LEFT_W: u16 = 28;
     const SIDE_MIN_W: u16 = 18;
     let total_w = chunks[1].width;
@@ -67,9 +69,9 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
     let top = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(LEFT_W),         // 現在の天気
-            Constraint::Length(radar_w_cells),  // レーダー
-            Constraint::Length(side_w),         // 週間予報サイド
+            Constraint::Length(LEFT_W),
+            Constraint::Length(radar_w_cells),
+            Constraint::Length(side_w),
         ])
         .split(chunks[1]);
     current::draw(f, top[0], state);
@@ -78,64 +80,114 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
 
     hourly::draw(f, chunks[2], state);
     draw_footer(f, chunks[3], state);
+
+    // ヘルプモーダル（最後に描画して最前面に）
+    if state.show_help {
+        help::draw(f, size);
+    }
 }
 
-// 通常パネル用は &AppState で十分なのでラッパを介す
-
-
 fn draw_header(f: &mut Frame, area: Rect, state: &AppState) {
+    // ロゴ + 場所 + プロバイダー + 時刻
+    let now = chrono::Local::now().format("%H:%M").to_string();
     let line = Line::from(vec![
-        Span::styled("termrain  ", Style::default().fg(Color::Cyan)),
-        Span::raw(format!(
-            "📍 {} ({:.3}, {:.3})  ",
-            state.config.location.name, state.config.location.latitude, state.config.location.longitude
-        )),
         Span::styled(
-            format!("[{}]", state.provider_name),
-            Style::default().fg(Color::Gray),
+            "  ⛅ termrain ",
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("│ ", Style::default().fg(theme::BORDER)),
+        Span::styled(
+            format!("📍 {}", state.config.location.name),
+            Style::default().fg(theme::FG),
+        ),
+        Span::styled(
+            format!(" ({:.3}, {:.3})", state.config.location.latitude, state.config.location.longitude),
+            Style::default().fg(theme::SUBTLE),
+        ),
+        Span::styled("  │  ", Style::default().fg(theme::BORDER)),
+        Span::styled(
+            &state.provider_name,
+            Style::default().fg(theme::ACCENT_2),
+        ),
+        Span::styled("  │  ", Style::default().fg(theme::BORDER)),
+        Span::styled(
+            format!("🕐 {}", now),
+            Style::default().fg(theme::SUBTLE),
         ),
     ]);
-    f.render_widget(Paragraph::new(line), area);
+    f.render_widget(
+        Paragraph::new(line).style(Style::default().bg(theme::BG)),
+        area,
+    );
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, state: &AppState) {
+    // ステータスバー風: 反転背景に主要キーをラベル化
     let play_mark = if state.radar_playing { "▶ " } else { "" };
     let map_label = match state.config.radar.map_style {
         crate::config::MapStyle::GsiStd => "標準",
         crate::config::MapStyle::CartoVoyager => "Carto",
         crate::config::MapStyle::GsiPhoto => "航空",
     };
-    let mut spans = vec![Span::styled(
-        format!(
-            "[q]終了 [r]更新 [+/-]ズーム [hjkl]移動 [, .]時刻 [p]{}再生 [m]地図:{}",
-            play_mark, map_label
-        ),
-        Style::default().fg(Color::Gray),
-    )];
+
+    let key_style = Style::default()
+        .fg(theme::BG)
+        .bg(theme::ACCENT)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(theme::FG).bg(theme::BORDER);
+    let sep_style = Style::default().bg(theme::BG);
+
+    let mut spans = vec![
+        Span::styled(" ? ", key_style),
+        Span::styled(" ヘルプ ", label_style),
+        Span::styled(" ", sep_style),
+        Span::styled(" q ", key_style),
+        Span::styled(" 終了 ", label_style),
+        Span::styled(" ", sep_style),
+        Span::styled(" r ", key_style),
+        Span::styled(" 更新 ", label_style),
+        Span::styled(" ", sep_style),
+        Span::styled(" hjkl ", key_style),
+        Span::styled(" 移動 ", label_style),
+        Span::styled(" ", sep_style),
+        Span::styled(" , . ", key_style),
+        Span::styled(" 時刻 ", label_style),
+        Span::styled(" ", sep_style),
+        Span::styled(" p ", key_style),
+        Span::styled(format!(" {}再生 ", play_mark), label_style),
+        Span::styled(" ", sep_style),
+        Span::styled(" m ", key_style),
+        Span::styled(format!(" {} ", map_label), label_style),
+    ];
     if let Some(err) = &state.last_error {
-        spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            format!("⚠ {}", err),
-            Style::default().fg(Color::Red),
+            "  ⚠ ",
+            Style::default().fg(theme::ERROR).bg(theme::BG),
+        ));
+        spans.push(Span::styled(
+            err.clone(),
+            Style::default().fg(theme::ERROR).bg(theme::BG),
         ));
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG)),
+        area,
+    );
 }
 
-// 共通ブロック生成（タイトル付きの枠）
-//
-// 色について:
-//   - 枠線は Gray にして、半透明背景の wezterm でも視認できる明るさにする
-//     （DarkGray は暗すぎて溶ける）
-//   - タイトル文字は Cyan＋太字で目立たせる
-fn titled_block(title: &str) -> Block<'_> {
+/// 共通パネル枠（角丸・テーマ色）
+pub fn titled_block(title: &str) -> Block<'_> {
     Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Gray))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::BORDER))
         .title(Span::styled(
-            title.to_string(),
+            format!(" {} ", title),
             Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(ratatui::style::Modifier::BOLD),
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
         ))
+        .style(Style::default().bg(theme::BG))
 }
