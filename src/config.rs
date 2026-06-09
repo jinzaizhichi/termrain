@@ -46,6 +46,9 @@ pub struct UiConfig {
     pub unit: String,
     /// 自動更新間隔（秒）。0 で無効
     pub refresh_interval: u64,
+    /// UI 表示言語。デフォルトは英語。
+    #[serde(default)]
+    pub language: crate::i18n::Language,
 }
 
 impl Default for UiConfig {
@@ -53,6 +56,7 @@ impl Default for UiConfig {
         Self {
             unit: "metric".into(),
             refresh_interval: 600,
+            language: crate::i18n::Language::default(),
         }
     }
 }

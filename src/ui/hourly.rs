@@ -13,13 +13,14 @@ use crate::app::AppState;
 use super::titled_block;
 
 pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
-    let block = titled_block("時間別予報  🌡 気温  💧 降水");
+    let s = crate::i18n::strings(state.config.ui.language);
+    let block = titled_block(s.hourly_title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     if state.hourly.is_empty() {
         let p = Paragraph::new(Line::from(Span::styled(
-            "読み込み中…",
+            s.loading,
             Style::default().fg(theme::SUBTLE),
         )));
         f.render_widget(p, inner);
@@ -46,7 +47,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
 
     let datasets = vec![
         Dataset::default()
-            .name("気温℃")
+            .name(s.hourly_temp_label)
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
             .style(Style::default().fg(theme::TEMP))
@@ -64,13 +65,17 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
     let n = points.len();
     let label_count = ((inner.width as usize) / 12).clamp(3, 6);
     let mut x_labels: Vec<Span> = Vec::with_capacity(label_count);
+    let hour_fmt = match state.config.ui.language {
+        crate::i18n::Language::Japanese => "%H時",
+        crate::i18n::Language::English => "%H:00",
+    };
     for k in 0..label_count {
         let idx = if label_count == 1 {
             0
         } else {
             (k * (n - 1)) / (label_count - 1)
         };
-        let text = points[idx].time.format("%H時").to_string();
+        let text = points[idx].time.format(hour_fmt).to_string();
         x_labels.push(Span::styled(text, Style::default().fg(theme::SUBTLE)));
     }
 
@@ -122,7 +127,8 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
                 }
             })
             .collect();
-        (bars, format!("降水量 (最大 {:.1}mm/h)", max_p))
+        let label = s.precip_amount_label.replace("{:.1}", &format!("{:.1}", max_p));
+        (bars, label)
     } else if has_pop {
         // 降水確率 (0-100%)
         let bars: String = points
@@ -139,9 +145,9 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
                 }
             })
             .collect();
-        (bars, "降水確率 (%, JMAは降水量未配信のため確率を代用)".into())
+        (bars, s.precip_prob_label.to_string())
     } else {
-        (" ".repeat(points.len()), "降水データなし".into())
+        (" ".repeat(points.len()), s.no_precip_data.to_string())
     };
 
     let bar_line = Line::from(Span::styled(bars, Style::default().fg(theme::RAIN)));

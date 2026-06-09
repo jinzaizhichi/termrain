@@ -1,7 +1,4 @@
 // ヘルプモーダル（`?` キーで表示）
-//
-// 画面中央に半透明風のオーバーレイで操作一覧と凡例を表示する。
-// 現在の画面を Clear で消してから上書きする。
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -10,9 +7,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{BorderType, Clear, Paragraph};
 
 use super::theme;
+use crate::app::AppState;
 
-pub fn draw(f: &mut Frame, area: Rect) {
-    // 中央 60×22 程度のサイズで配置
+pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
+    let s = crate::i18n::strings(state.config.ui.language);
     let modal = centered_rect(70, 24, area);
     f.render_widget(Clear, modal);
 
@@ -21,7 +19,7 @@ pub fn draw(f: &mut Frame, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme::ACCENT))
         .title(Span::styled(
-            " ❓ ヘルプ ",
+            s.help_title.to_string(),
             Style::default()
                 .fg(theme::ACCENT_2)
                 .add_modifier(Modifier::BOLD),
@@ -31,26 +29,26 @@ pub fn draw(f: &mut Frame, area: Rect) {
     f.render_widget(block, modal);
 
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(section("キー操作"));
-    lines.push(kv("q  /  Esc", "終了"));
-    lines.push(kv("?", "このヘルプを開く / 閉じる"));
-    lines.push(kv("r", "現在時刻に戻して再取得"));
-    lines.push(kv("+ / -", "ズーム（市〜街区レベル）"));
-    lines.push(kv("h j k l", "地点の移動（≒2km）"));
-    lines.push(kv(", / .", "雨雲を時系列で前後にスクラブ"));
-    lines.push(kv("p", "雨雲アニメーション再生 toggle"));
-    lines.push(kv("m", "地図スタイル切替 (CARTO / 標準 / 航空)"));
+    lines.push(section(s.help_keys_section));
+    lines.push(kv(s.help_q_esc, s.help_q_esc_desc));
+    lines.push(kv("?", s.help_qmark_desc));
+    lines.push(kv("r", s.help_r_desc));
+    lines.push(kv("+ / -", s.help_zoom_desc));
+    lines.push(kv("h j k l", s.help_move_desc));
+    lines.push(kv(", / .", s.help_scrub_desc));
+    lines.push(kv("p", s.help_play_desc));
+    lines.push(kv("m", s.help_map_desc));
     lines.push(Line::from(""));
-    lines.push(section("雨雲の色凡例 (mm/h)"));
+    lines.push(section(s.help_legend_section));
     lines.push(legend_line());
     lines.push(Line::from(""));
-    lines.push(section("データソース"));
-    lines.push(kv("雨雲(国内)", "気象庁ナウキャスト"));
-    lines.push(kv("雨雲(海外)", "Open-Meteo"));
-    lines.push(kv("地図", "CARTO / 国土地理院"));
+    lines.push(section(s.help_sources_section));
+    lines.push(kv(s.help_source_rain_jp, s.help_source_rain_jp_value));
+    lines.push(kv(s.help_source_rain_global, s.help_source_rain_global_value));
+    lines.push(kv(s.help_source_map, s.help_source_map_value));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  何かキーを押して閉じる",
+        s.help_close_hint.to_string(),
         Style::default().fg(theme::SUBTLE),
     )));
 
@@ -80,7 +78,6 @@ fn kv(key: &str, desc: &str) -> Line<'static> {
 }
 
 fn legend_line() -> Line<'static> {
-    // 雨雲カラーバーをミニチュアで表示
     let stops = [
         ("1", (200u8, 230, 255)),
         ("4", (40, 130, 230)),

@@ -15,7 +15,8 @@ use super::titled_block;
 use crate::app::AppState;
 
 pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
-    let block = titled_block("週間予報");
+    let s = crate::i18n::strings(state.config.ui.language);
+    let block = titled_block(s.weekly_title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -23,7 +24,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
     if state.daily.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            format!("  {} 取得中…", state.spinner()),
+            format!("  {} {}", state.spinner(), s.fetching),
             Style::default().fg(theme::SUBTLE),
         )));
         f.render_widget(Paragraph::new(lines), inner);

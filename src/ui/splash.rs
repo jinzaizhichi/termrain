@@ -38,9 +38,10 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
                 .add_modifier(Modifier::BOLD),
         )));
     }
+    let s = crate::i18n::strings(state.config.ui.language);
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  ターミナルの天気予報・雨雲レーダー",
+        s.splash_tagline.to_string(),
         Style::default().fg(theme::FG),
     )));
     lines.push(Line::from(Span::styled(
@@ -49,7 +50,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("  {} 起動中…", state.spinner()),
+        format!("  {} {}", state.spinner(), s.splash_starting),
         Style::default().fg(theme::ACCENT_2),
     )));
 

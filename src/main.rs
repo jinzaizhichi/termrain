@@ -10,6 +10,7 @@ mod api;
 mod app;
 mod cli;
 mod config;
+mod i18n;
 mod map;
 mod render;
 mod ui;

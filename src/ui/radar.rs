@@ -36,6 +36,7 @@ use ratatui_image::{Resize, StatefulImage};
 /// StatefulImage は描画時に area サイズに合わせてリサイズするため、
 /// パネルが大きいウィンドウでも画像が領域いっぱいに広がる。
 fn draw_image_radar(f: &mut Frame, area: Rect, state: &mut AppState) {
+    let s = crate::i18n::strings(state.config.ui.language);
     let Some(grid) = state.radar.as_ref() else {
         return;
     };
@@ -47,28 +48,46 @@ fn draw_image_radar(f: &mut Frame, area: Rect, state: &mut AppState) {
     // 現在時刻との差分（分）から「+5分」等の相対表示を作る
     let now = chrono::Local::now();
     let diff_min = (grid.observed_at - now).num_minutes();
-    let rel = if diff_min == 0 {
-        "現在".to_string()
-    } else if diff_min > 0 {
-        format!("+{}分", diff_min)
-    } else {
-        format!("{}分", diff_min)
+    let rel = match state.config.ui.language {
+        crate::i18n::Language::Japanese => {
+            if diff_min == 0 {
+                "現在".to_string()
+            } else if diff_min > 0 {
+                format!("+{}分", diff_min)
+            } else {
+                format!("{}分", diff_min)
+            }
+        }
+        crate::i18n::Language::English => {
+            if diff_min == 0 {
+                "now".to_string()
+            } else if diff_min > 0 {
+                format!("+{}min", diff_min)
+            } else {
+                format!("{}min", diff_min)
+            }
+        }
     };
     let play = if state.radar_playing { " ▶" } else { "" };
     let map_attrib = state.config.radar.map_style.label();
-    // 取得中はスピナーを先頭に置いてタイトル色も注意色 (WARN) に切替
     let loading_mark = if state.radar_loading {
         format!("{} ", state.spinner())
     } else {
         String::new()
     };
+    let map_word = match state.config.ui.language {
+        crate::i18n::Language::Japanese => "地図",
+        crate::i18n::Language::English => "Map",
+    };
     let title = format!(
-        "{}雨雲レーダー  {} ({}){}  max {:.1}mm/h  [地図: {}]",
+        "{}{}  {} ({}){}  max {:.1}mm/h  [{}: {}]",
         loading_mark,
+        s.radar_title,
         grid.observed_at.format("%H:%M"),
         rel,
         play,
         max_mmh,
+        map_word,
         map_attrib,
     );
     let block = if state.radar_loading {

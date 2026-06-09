@@ -52,11 +52,21 @@ pub struct Jma {
     map_image_cache: Arc<Mutex<HashMap<MapTileKey, Arc<image::RgbaImage>>>>,
     /// 現在の地図スタイル。Arc<Mutex> で外部から動的に切り替え可能。
     map_style: Arc<Mutex<crate::config::MapStyle>>,
+    /// 表示言語（内部で呼び出す OpenMeteo にも反映する）
+    language: Arc<Mutex<crate::i18n::Language>>,
 }
 
 impl Jma {
     pub fn set_map_style(&self, style: crate::config::MapStyle) {
         *self.map_style.lock().unwrap() = style;
+    }
+    pub fn set_language(&self, lang: crate::i18n::Language) {
+        *self.language.lock().unwrap() = lang;
+    }
+    fn om(&self) -> super::open_meteo::OpenMeteo {
+        let om = super::open_meteo::OpenMeteo::new();
+        om.set_language(*self.language.lock().unwrap());
+        om
     }
 }
 
@@ -74,6 +84,7 @@ impl Jma {
             rain_image_cache: Arc::new(Mutex::new(HashMap::new())),
             map_image_cache: Arc::new(Mutex::new(HashMap::new())),
             map_style: Arc::new(Mutex::new(crate::config::MapStyle::CartoVoyager)),
+            language: Arc::new(Mutex::new(crate::i18n::Language::default())),
         }
     }
 
@@ -334,10 +345,7 @@ impl WeatherProvider for Jma {
         // 気温・湿度・風は Open-Meteo の実況値を採用（JMA は配信していない）。
         // forecast の最高気温は概況の「今日の予想最高気温」相当なのでフォールバックに残す。
         let fallback_temp = fetch_today_temp(&self.client, area).await.unwrap_or(f64::NAN);
-        let om_now = super::open_meteo::OpenMeteo::new()
-            .current(lat, lon)
-            .await
-            .ok();
+        let om_now = self.om().current(lat, lon).await.ok();
         let (temperature_c, humidity_pct, wind_speed_ms, wind_direction_deg, observed_at) =
             match om_now {
                 Some(c) => (
@@ -370,7 +378,7 @@ impl WeatherProvider for Jma {
         // （temps は最低/最高の 2 点のみ、pops は 3 時間刻み）。
         // 国内でも詳細グラフを出すには 1 時間粒度のデータが必要なので、
         // hourly は Open-Meteo に委譲する（雨雲レーダーは引き続き JMA を使う）。
-        super::open_meteo::OpenMeteo::new().hourly(lat, lon).await
+        self.om().hourly(lat, lon).await
     }
 
     async fn daily(&self, lat: f64, lon: f64) -> Result<Vec<DailyPoint>> {
@@ -467,7 +475,7 @@ impl WeatherProvider for Jma {
         // JMA 週間予報の初日（=今日）の最高気温は未確定のことが多い。
         // 空欄を Open-Meteo の同日データで埋めて表示の歯抜けを防ぐ。
         if out.iter().any(|d| d.temp_max_c.is_none() || d.temp_min_c.is_none()) {
-            if let Ok(om) = super::open_meteo::OpenMeteo::new().daily(lat, lon).await {
+            if let Ok(om) = self.om().daily(lat, lon).await {
                 for d in out.iter_mut() {
                     if let Some(o) = om.iter().find(|o| o.date == d.date) {
                         if d.temp_max_c.is_none() {
@@ -489,6 +497,10 @@ impl WeatherProvider for Jma {
 
     fn set_map_style(&self, style: crate::config::MapStyle) {
         Self::set_map_style(self, style);
+    }
+
+    fn set_language(&self, lang: crate::i18n::Language) {
+        Self::set_language(self, lang);
     }
 
     async fn radar(&self, lat: f64, lon: f64, zoom: u8, time_offset: i32) -> Result<RadarGrid> {

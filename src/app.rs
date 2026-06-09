@@ -99,7 +99,7 @@ pub async fn run(args: Args) -> Result<()> {
         let client = reqwest::Client::builder()
             .user_agent("termrain/0.1")
             .build()?;
-        match crate::api::geocoding::search(&client, city).await {
+        match crate::api::geocoding::search(&client, city, config.ui.language).await {
             Ok(hit) => {
                 config.location.name = hit.name;
                 config.location.latitude = hit.latitude;
@@ -130,8 +130,9 @@ pub async fn run(args: Args) -> Result<()> {
     let provider: Arc<dyn WeatherProvider> =
         Arc::from(select_provider(&config.location.country, args.force_jma));
     let provider_name = provider.name().to_string();
-    // 設定で指定された地図スタイルをプロバイダーに反映
+    // 設定で指定された地図スタイル・言語をプロバイダーに反映
     provider.set_map_style(config.radar.map_style);
+    provider.set_language(config.ui.language);
 
     // --dump モード: TUI を立ち上げず標準出力に出して終了
     if args.dump {

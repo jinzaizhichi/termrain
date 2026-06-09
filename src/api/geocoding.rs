@@ -24,10 +24,15 @@ struct RespHit {
     country_code: Option<String>,
 }
 
-pub async fn search(client: &reqwest::Client, query: &str) -> Result<GeoHit> {
+pub async fn search(
+    client: &reqwest::Client,
+    query: &str,
+    lang: crate::i18n::Language,
+) -> Result<GeoHit> {
     let url = format!(
-        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=ja",
-        urlencoding::encode(query)
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language={}",
+        urlencoding::encode(query),
+        lang.api_code(),
     );
     let r: Resp = client.get(&url).send().await?.error_for_status()?.json().await?;
     let hit = r

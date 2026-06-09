@@ -83,7 +83,7 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
 
     // ヘルプモーダル（最後に描画して最前面に）
     if state.show_help {
-        help::draw(f, size);
+        help::draw(f, size, state);
     }
 }
 
@@ -124,12 +124,13 @@ fn draw_header(f: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, state: &AppState) {
+    let s = crate::i18n::strings(state.config.ui.language);
     // ステータスバー風: 反転背景に主要キーをラベル化
     let play_mark = if state.radar_playing { "▶ " } else { "" };
     let map_label = match state.config.radar.map_style {
-        crate::config::MapStyle::GsiStd => "標準",
+        crate::config::MapStyle::GsiStd => "GSI",
         crate::config::MapStyle::CartoVoyager => "Carto",
-        crate::config::MapStyle::GsiPhoto => "航空",
+        crate::config::MapStyle::GsiPhoto => "Aerial",
     };
 
     let key_style = Style::default()
@@ -141,22 +142,22 @@ fn draw_footer(f: &mut Frame, area: Rect, state: &AppState) {
 
     let mut spans = vec![
         Span::styled(" ? ", key_style),
-        Span::styled(" ヘルプ ", label_style),
+        Span::styled(format!(" {} ", s.key_help), label_style),
         Span::styled(" ", sep_style),
         Span::styled(" q ", key_style),
-        Span::styled(" 終了 ", label_style),
+        Span::styled(format!(" {} ", s.key_quit), label_style),
         Span::styled(" ", sep_style),
         Span::styled(" r ", key_style),
-        Span::styled(" 更新 ", label_style),
+        Span::styled(format!(" {} ", s.key_refresh), label_style),
         Span::styled(" ", sep_style),
         Span::styled(" hjkl ", key_style),
-        Span::styled(" 移動 ", label_style),
+        Span::styled(format!(" {} ", s.key_move), label_style),
         Span::styled(" ", sep_style),
         Span::styled(" , . ", key_style),
-        Span::styled(" 時刻 ", label_style),
+        Span::styled(format!(" {} ", s.key_time), label_style),
         Span::styled(" ", sep_style),
         Span::styled(" p ", key_style),
-        Span::styled(format!(" {}再生 ", play_mark), label_style),
+        Span::styled(format!(" {}{} ", play_mark, s.key_play), label_style),
         Span::styled(" ", sep_style),
         Span::styled(" m ", key_style),
         Span::styled(format!(" {} ", map_label), label_style),

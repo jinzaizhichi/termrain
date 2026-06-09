@@ -109,6 +109,9 @@ pub trait WeatherProvider: Send + Sync {
 
     /// 背景地図スタイルの切替（JMA だけが対応、Open-Meteo は無視）
     fn set_map_style(&self, _style: crate::config::MapStyle) {}
+
+    /// 表示言語の切替（Open-Meteo が wmo_to_text の言語切替に使う）
+    fn set_language(&self, _lang: crate::i18n::Language) {}
 }
 
 /// 国コードからプロバイダーを選択。

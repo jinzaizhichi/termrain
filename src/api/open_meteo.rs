@@ -25,6 +25,8 @@ pub struct OpenMeteo {
     map_image_cache: Arc<Mutex<HashMap<MapTileKey, Arc<image::RgbaImage>>>>,
     /// 地図スタイル（外国対応のため CARTO のみ実用）
     map_style: Arc<Mutex<crate::config::MapStyle>>,
+    /// 天気テキスト等の表示言語
+    language: Arc<Mutex<crate::i18n::Language>>,
 }
 
 impl OpenMeteo {
@@ -38,7 +40,12 @@ impl OpenMeteo {
             client,
             map_image_cache: Arc::new(Mutex::new(HashMap::new())),
             map_style: Arc::new(Mutex::new(crate::config::MapStyle::CartoVoyager)),
+            language: Arc::new(Mutex::new(crate::i18n::Language::default())),
         }
+    }
+
+    pub fn set_language(&self, lang: crate::i18n::Language) {
+        *self.language.lock().unwrap() = lang;
     }
 
     pub fn set_map_style(&self, style: crate::config::MapStyle) {
@@ -138,23 +145,42 @@ fn wmo_to_icon(code: u32) -> WeatherIcon {
     }
 }
 
-fn wmo_to_text(code: u32) -> &'static str {
-    match code {
-        0 => "快晴",
-        1 => "晴れ",
-        2 => "晴れ時々曇り",
-        3 => "曇り",
-        45 | 48 => "霧",
-        51 | 53 | 55 => "霧雨",
-        61 | 63 | 65 => "雨",
-        66 | 67 => "凍雨",
-        71 | 73 | 75 => "雪",
-        77 => "霧雪",
-        80 | 81 | 82 => "にわか雨",
-        85 | 86 => "にわか雪",
-        95 => "雷雨",
-        96 | 99 => "雷雨（雹あり）",
-        _ => "不明",
+fn wmo_to_text(code: u32, lang: crate::i18n::Language) -> &'static str {
+    match (lang, code) {
+        (crate::i18n::Language::Japanese, c) => match c {
+            0 => "快晴",
+            1 => "晴れ",
+            2 => "晴れ時々曇り",
+            3 => "曇り",
+            45 | 48 => "霧",
+            51 | 53 | 55 => "霧雨",
+            61 | 63 | 65 => "雨",
+            66 | 67 => "凍雨",
+            71 | 73 | 75 => "雪",
+            77 => "霧雪",
+            80 | 81 | 82 => "にわか雨",
+            85 | 86 => "にわか雪",
+            95 => "雷雨",
+            96 | 99 => "雷雨（雹あり）",
+            _ => "不明",
+        },
+        (crate::i18n::Language::English, c) => match c {
+            0 => "Clear",
+            1 => "Mostly clear",
+            2 => "Partly cloudy",
+            3 => "Cloudy",
+            45 | 48 => "Fog",
+            51 | 53 | 55 => "Drizzle",
+            61 | 63 | 65 => "Rain",
+            66 | 67 => "Freezing rain",
+            71 | 73 | 75 => "Snow",
+            77 => "Snow grains",
+            80 | 81 | 82 => "Showers",
+            85 | 86 => "Snow showers",
+            95 => "Thunderstorm",
+            96 | 99 => "Thunderstorm w/ hail",
+            _ => "Unknown",
+        },
     }
 }
 
@@ -213,7 +239,7 @@ impl WeatherProvider for OpenMeteo {
         let cur = resp.current.context("Open-Meteo: current が無い")?;
         Ok(CurrentWeather {
             observed_at: parse_local_with_offset(&cur.time, offset)?,
-            condition: wmo_to_text(cur.weather_code).to_string(),
+            condition: wmo_to_text(cur.weather_code, *self.language.lock().unwrap()).to_string(),
             icon: wmo_to_icon(cur.weather_code),
             temperature_c: cur.temperature_2m,
             humidity_pct: cur.relative_humidity_2m,
@@ -274,7 +300,7 @@ impl WeatherProvider for OpenMeteo {
             let code = d.weather_code[i];
             out.push(DailyPoint {
                 date,
-                condition: wmo_to_text(code).into(),
+                condition: wmo_to_text(code, *self.language.lock().unwrap()).into(),
                 icon: wmo_to_icon(code),
                 temp_max_c: d.temperature_2m_max[i],
                 temp_min_c: d.temperature_2m_min[i],
@@ -410,6 +436,9 @@ impl WeatherProvider for OpenMeteo {
 
     fn set_map_style(&self, style: crate::config::MapStyle) {
         Self::set_map_style(self, style);
+    }
+    fn set_language(&self, lang: crate::i18n::Language) {
+        Self::set_language(self, lang);
     }
 }
 
