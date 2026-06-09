@@ -346,26 +346,46 @@ impl WeatherProvider for Jma {
         // forecast の最高気温は概況の「今日の予想最高気温」相当なのでフォールバックに残す。
         let fallback_temp = fetch_today_temp(&self.client, area).await.unwrap_or(f64::NAN);
         let om_now = self.om().current(lat, lon).await.ok();
-        let (temperature_c, humidity_pct, wind_speed_ms, wind_direction_deg, observed_at) =
-            match om_now {
-                Some(c) => (
-                    c.temperature_c,
-                    c.humidity_pct,
-                    c.wind_speed_ms,
-                    c.wind_direction_deg,
-                    c.observed_at,
-                ),
-                None => (fallback_temp, None, None, None, _jma_report_at),
-            };
+        // 短い条件文字列 / アイコンも Open-Meteo の値を採用する。
+        // JMA 概況テキスト(condition変数)は長文の日本語で、英語UIにはそぐわないし
+        // 1行パネルにも収まらないので、ここでは捨てる。
+        let (
+            temperature_c,
+            humidity_pct,
+            wind_speed_ms,
+            wind_direction_deg,
+            observed_at,
+            condition_out,
+            icon_out,
+        ) = match om_now {
+            Some(c) => (
+                c.temperature_c,
+                c.humidity_pct,
+                c.wind_speed_ms,
+                c.wind_direction_deg,
+                c.observed_at,
+                c.condition,
+                c.icon,
+            ),
+            None => (
+                fallback_temp,
+                None,
+                None,
+                None,
+                _jma_report_at,
+                if condition.is_empty() {
+                    overview.target_area
+                } else {
+                    condition
+                },
+                icon,
+            ),
+        };
 
         Ok(CurrentWeather {
             observed_at,
-            condition: if condition.is_empty() {
-                overview.target_area
-            } else {
-                condition
-            },
-            icon,
+            condition: condition_out,
+            icon: icon_out,
             temperature_c,
             humidity_pct,
             wind_speed_ms,

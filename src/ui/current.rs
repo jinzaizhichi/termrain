@@ -3,10 +3,26 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use super::theme;
 use super::titled_block;
 use crate::app::AppState;
+
+/// 表示幅 (East Asian Wide 考慮) で切り詰める
+fn truncate_w(s: &str, width: usize) -> String {
+    let mut acc = String::new();
+    let mut used = 0usize;
+    for c in s.chars() {
+        let cw = UnicodeWidthStr::width(c.to_string().as_str());
+        if used + cw > width {
+            break;
+        }
+        acc.push(c);
+        used += cw;
+    }
+    acc
+}
 
 pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
     let s = crate::i18n::strings(state.config.ui.language);
@@ -16,13 +32,16 @@ pub fn draw(f: &mut Frame, area: Rect, state: &AppState) {
 
     let mut lines: Vec<Line> = Vec::new();
     if let Some(cw) = &state.current {
+        // パネルの内側幅から、アイコン分（4桁ぶん）を引いた残りまでで切り詰め
+        let cond_max = (inner.width as usize).saturating_sub(6);
+        let cond = truncate_w(&cw.condition, cond_max);
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {}  ", cw.icon.symbol()),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                cw.condition.chars().take(16).collect::<String>(),
+                cond,
                 Style::default()
                     .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
