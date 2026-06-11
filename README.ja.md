@@ -189,7 +189,8 @@ rm -rf ~/.cache/termrain
 - **気象庁ナウキャスト** (雨雲レーダー、日本): <https://www.jma.go.jp/>
 - **国土地理院** (地図タイル、日本): <https://maps.gsi.go.jp/>
 - **CARTO Basemaps** (地図タイル、世界): © OpenStreetMap contributors, © CARTO
-- **Open-Meteo** (海外の天気・雨雲、Geocoding): <https://open-meteo.com/>
+- **Open-Meteo** (海外の天気予報、Geocoding): <https://open-meteo.com/>
+- **RainViewer** (海外の雨雲レーダータイル): <https://www.rainviewer.com/>
 - **Natural Earth** (海岸線・国境): public domain
 - **GADM 4.1** (日本市町村界): <https://gadm.org/>
 

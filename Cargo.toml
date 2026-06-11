@@ -2,7 +2,7 @@
 name = "termrain"
 version = "0.3.0"
 edition = "2024"
-description = "Terminal weather forecast and rain radar TUI (JMA + Open-Meteo, Kitty graphics)"
+description = "Terminal weather forecast and rain radar TUI (JMA + Open-Meteo + RainViewer, Kitty graphics)"
 license = "MIT"
 authors = ["iorinu"]
 repository = "https://github.com/iorinu/termrain"

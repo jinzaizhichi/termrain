@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-11
+
+### Changed
+- **Foreign radar source switched from Open-Meteo to RainViewer.**
+  The previous 32×16 multi-point precipitation query hit free-tier rate
+  limits (429) after a few pans, and was replaced with RainViewer's tile
+  API (free, world coverage, no API key).
+- Provider name shown in the header is now `Open-Meteo + RainViewer` for
+  non-Japan locations to reflect both data sources.
+- Radar playback range is now provider-specific via the new
+  `WeatherProvider::radar_offset_range()` trait method. JMA stays at
+  `-6..=+12`; Open-Meteo + RainViewer uses `-12..=0` (past 2 h only,
+  matching RainViewer's free tier).
+
+### Added
+- Skip "max X mm/h" in the radar panel title when no numeric data is
+  available (image-based providers like RainViewer).
+
+### Fixed
+- Radar timestamp was previously stuck at the latest past frame during
+  playback for foreign locations (the play loop iterated offsets the
+  provider didn't actually support).
+- Open-Meteo radar tiles are only fetched within the visible view
+  range (typically 1, up to 4 tiles) instead of a blind 5×3 grid.
+
+## [0.2.2] - 2026-06-11
+
+### Fixed
+- Foreign radar (Open-Meteo) failed to load with HTTP 414 because the
+  GET URL exceeded ~8000 chars for the 512-point precipitation query.
+  Switched to POST with a JSON body.
+- `observed_at` was interpreted in UTC+0 for foreign locations, making
+  the timestamp off by the local UTC offset.
+
+### Changed
+- Parallelized Open-Meteo precipitation POST and CARTO map tile fetches
+  during radar rendering.
+- Extracted the Open-Meteo base URL into an `API_BASE` constant.
+
+## [0.2.1] - 2026-06-11
+
+### Fixed
+- Radar panel title in the canvas fallback renderer was hardcoded to
+  Japanese; now uses the i18n strings so `--lang english` shows `Radar`.
+
+## [0.2.0] - 2026-06-11
+
+### Added
+- Wide composite radar images that fill wide terminals via aspect-aware
+  rendering (radar panel now uses the full available width on widescreen
+  setups).
+
+### Changed
+- UI polish: panel temperature gradients, colored rain bars in the
+  hourly list, and a now-highlight on the current hour.
+
 ## [0.1.0] - 2026-06-10
 
 Initial public release.

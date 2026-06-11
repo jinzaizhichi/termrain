@@ -129,7 +129,7 @@ const EN: Strings = Strings {
     help_source_rain_global: "Rain (intl.)",
     help_source_map: "Map",
     help_source_rain_jp_value: "JMA Nowcast",
-    help_source_rain_global_value: "Open-Meteo",
+    help_source_rain_global_value: "RainViewer + Open-Meteo",
     help_source_map_value: "CARTO / GSI",
 
     hourly_temp_label: "Temp°C",
@@ -182,7 +182,7 @@ const JA: Strings = Strings {
     help_source_rain_global: "雨雲 (海外)",
     help_source_map: "地図",
     help_source_rain_jp_value: "気象庁ナウキャスト",
-    help_source_rain_global_value: "Open-Meteo",
+    help_source_rain_global_value: "RainViewer + Open-Meteo",
     help_source_map_value: "CARTO / 国土地理院",
 
     hourly_temp_label: "気温℃",

@@ -190,7 +190,8 @@ rm -rf ~/.cache/termrain
 - **JMA Nowcast** (rain radar, Japan): <https://www.jma.go.jp/>
 - **GSI (Geospatial Information Authority of Japan)** (map tiles, Japan): <https://maps.gsi.go.jp/>
 - **CARTO Basemaps** (map tiles, worldwide): © OpenStreetMap contributors, © CARTO
-- **Open-Meteo** (weather & rain outside Japan, geocoding): <https://open-meteo.com/>
+- **Open-Meteo** (weather forecast outside Japan, geocoding): <https://open-meteo.com/>
+- **RainViewer** (rain radar tiles outside Japan): <https://www.rainviewer.com/>
 - **Natural Earth** (coastline, country borders): public domain
 - **GADM 4.1** (Japanese municipal boundaries): <https://gadm.org/>
 
