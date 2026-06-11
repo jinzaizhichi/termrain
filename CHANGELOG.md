@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-11
+
 ### Added
 - `--completion <SHELL>` flag to emit shell completion scripts
   (bash / zsh / fish / powershell / elvish).
 - Homebrew formula auto-installs shell completion via
-  `generate_completions_from_executable` on next release.
+  `generate_completions_from_executable`.
 
 ### Changed
 - `--help` output is now in English (CLI doc comments translated).
